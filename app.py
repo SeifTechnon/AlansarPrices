@@ -6,6 +6,12 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 try:
+    from tkinterdnd2 import COPY, DND_TEXT, TkinterDnD  # enables dragging numbers into other apps
+    HAS_DND = True
+except Exception:
+    HAS_DND = False
+
+try:
     import ctypes
     ctypes.windll.shcore.SetProcessDpiAwareness(1)  # crisp rendering on high DPI screens
 except Exception:
@@ -50,7 +56,7 @@ def pick_palette():
 
 WOOD1, WOOD2, NAVY, RED, TITLE = pick_palette()
 
-root = tk.Tk()
+root = TkinterDnD.Tk() if HAS_DND else tk.Tk()
 root.title("Alansar - Digital Print Prices")
 try:
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -64,8 +70,31 @@ cv = tk.Canvas(root, highlightthickness=0, bg=WOOD1)
 cv.pack(fill="both", expand=True)
 
 probe = tkfont.Font(family=FONT, size=-100, weight="bold")
-st = {"sx": 1.0, "sy": 1.0, "job": None, "toast": None}
-hits = []  # clickable areas: (kind, cx, cy, half_w, half_h, text)
+HL_COLOR = "#9b0000"  # dark red highlight for the selected price and its headers
+AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+st = {"sx": 1.0, "sy": 1.0, "job": None, "toast": None, "sel": None, "press": None}
+hits = []  # clickable areas: (kind, cx, cy, half_w, half_h, value, ref)
+
+
+def to_western(text):
+    """Arabic-Indic digits to English digits, comma to dot (for calculators)."""
+    return text.translate(AR_DIGITS).replace(",", ".")
+
+
+def is_selected(ref):
+    if ref is None or st["sel"] is None:
+        return False
+    row, col = st["sel"]
+    kind = ref[0]
+    if kind == "p":
+        return ref[1] == row and ref[2] == col
+    if kind == "l":
+        return ref[1] == row
+    if kind == "s":
+        return ref[1] == col
+    if kind == "z":
+        return ref[1] == col // 2
+    return False
 
 
 def fit(s, w_px, h_px, w_frac, h_frac):
@@ -79,18 +108,19 @@ def fit(s, w_px, h_px, w_frac, h_frac):
 def build_items():
     items = []
 
-    def add(kind, cx, cy, w, h, s, group, fill=RED, stroke="white", icon=None, mode="center"):
-        items.append(dict(kind=kind, cx=cx, cy=cy, w=w, h=h, s=s, group=group, fill=fill, stroke=stroke, icon=icon, mode=mode))
+    def add(kind, cx, cy, w, h, s, group, fill=RED, stroke="white", icon=None, mode="center", ref=None):
+        items.append(dict(kind=kind, cx=cx, cy=cy, w=w, h=h, s=s, group=group, fill=fill, stroke=stroke,
+                          icon=icon, mode=mode, ref=ref))
 
     add("free", 310, 45, 420, 62, "الأنصار", "title", TITLE)
     add("free", 310, 100, 420, 36, "أسعار الطباعة الديجيتال", "subtitle", TITLE)
 
     label_x = 535
     cols = [415, 305, 195, 85]
-    add("oval", (cols[0] + cols[1]) / 2, 165, 230, 58, "ربع 33 × 48,7", "size")
-    add("oval", (cols[2] + cols[3]) / 2, 165, 230, 58, "ربع جاير 33 × 44", "size")
+    add("oval", (cols[0] + cols[1]) / 2, 165, 230, 58, "ربع 33 × 48,7", "size", ref=("z", 0))
+    add("oval", (cols[2] + cols[3]) / 2, 165, 230, 58, "ربع جاير 33 × 44", "size", ref=("z", 1))
     for i, t in enumerate(["وجه (1)", "وجهين", "وجه (1)", "وجهين"]):
-        add("oval", cols[i], 232, 100, 42, t, "sub")
+        add("oval", cols[i], 232, 100, 42, t, "sub", ref=("s", i))
 
     rows = [
         ("٣٠٠ جرام", ["١٠", "١٢,٥٠", "١٠", "١٢"]),
@@ -99,10 +129,10 @@ def build_items():
         ("١٥٠ جرام", ["٧,٤٠", "٩,٧٠", "٧,١٠", "٩,١٠"]),
     ]
     y = 300
-    for label, prices in rows:
-        add("oval", label_x, y, 112, 52, label, "label")
-        for cx, p in zip(cols, prices):
-            add("oval", cx, y, 100, 50, p, "price")
+    for r, (label, prices) in enumerate(rows):
+        add("oval", label_x, y, 112, 52, label, "label", ref=("l", r))
+        for c, (cx, p) in enumerate(zip(cols, prices)):
+            add("oval", cx, y, 100, 50, p, "price", ref=("p", r, c))
         y += 66
 
     add("rect", 535, 575, 112, 54, "استيكر", "sticker")
@@ -143,6 +173,7 @@ def draw_icon(kind, ix, cy, px):
 def draw():
     cw, ch = max(cv.winfo_width(), 1), max(cv.winfo_height(), 1)
     sx, sy = cw / BASE_W, ch / BASE_H
+    st["sx"], st["sy"] = sx, sy
     cv.delete("all")
     hits.clear()
 
@@ -173,10 +204,11 @@ def draw():
     for it in items:
         cx, cy = it["cx"] * sx, it["cy"] * sy
         hw, hh = it["w"] * sx / 2, it["h"] * sy / 2
+        shape_fill = HL_COLOR if is_selected(it["ref"]) else NAVY
         if it["kind"] == "oval":
-            cv.create_oval(cx - hw, cy - hh, cx + hw, cy + hh, fill=NAVY, outline="white", width=border)
+            cv.create_oval(cx - hw, cy - hh, cx + hw, cy + hh, fill=shape_fill, outline="white", width=border)
             if it["group"] == "price":
-                hits.append(("oval", cx, cy, hw, hh, it["s"]))
+                hits.append(("oval", cx, cy, hw, hh, to_western(it["s"]), it["ref"]))
         elif it["kind"] == "rect":
             cv.create_rectangle(cx - hw, cy - hh, cx + hw, cy + hh, fill=NAVY, outline="white", width=border)
 
@@ -203,54 +235,92 @@ def draw():
                 pos = it["s"].find(part, idx)
                 part_x = text_left + probe.measure(it["s"][:pos]) * px / 100
                 part_w = probe.measure(part) * px / 100
-                hits.append(("rect", part_x + part_w / 2, cy, part_w / 2 + 2, px * 0.9, part))
+                hits.append(("rect", part_x + part_w / 2, cy, part_w / 2 + 2, px * 0.9, part, None))
                 idx = pos + len(part)
             cx = x0 + d + gap + tw / 2
+        selected = is_selected(it["ref"])
+        text_fill = "white" if selected else it["fill"]
+        text_stroke = "black" if selected else it["stroke"]
         r = max(1, round(px * 0.06))
         for k in range(12):
             a = 2 * math.pi * k / 12
             cv.create_text(cx + r * math.cos(a), cy + r * math.sin(a), text=it["s"], font=font,
-                           fill=it["stroke"], justify="center")
-        cv.create_text(cx, cy, text=it["s"], font=font, fill=it["fill"], justify="center")
+                           fill=text_stroke, justify="center")
+        cv.create_text(cx, cy, text=it["s"], font=font, fill=text_fill, justify="center")
         if icon_x is not None:
             draw_icon(it["icon"], icon_x, cy, px)
 
 
 def find_hit(x, y):
-    for kind, cx, cy, hw, hh, value in reversed(hits):
+    for kind, cx, cy, hw, hh, value, ref in reversed(hits):
         if kind == "oval":
             if hw and hh and ((x - cx) / hw) ** 2 + ((y - cy) / hh) ** 2 <= 1:
-                return value
+                return value, ref
         elif abs(x - cx) <= hw and abs(y - cy) <= hh:
-            return value
+            return value, ref
     return None
 
 
-def show_toast():
+def show_toast(value):
     if st["toast"]:
         root.after_cancel(st["toast"])
     cv.delete("toast")
     cw, ch = cv.winfo_width(), cv.winfo_height()
     px = max(14, int(min(st["sx"], st["sy"]) * 20))
-    cv.create_rectangle(cw / 2 - px * 4, ch - px * 3, cw / 2 + px * 4, ch - px * 1.2,
+    cv.create_rectangle(cw / 2 - px * 4, ch - px * 4.4, cw / 2 + px * 4, ch - px * 1.2,
                         fill="black", outline="white", width=2, tags="toast")
-    cv.create_text(cw / 2, ch - px * 2.1, text="تم النسخ", fill="white",
+    cv.create_text(cw / 2, ch - px * 3.4, text="تم النسخ", fill="white",
                    font=(FONT, -px, "bold"), tags="toast")
-    st["toast"] = root.after(1200, lambda: cv.delete("toast"))
+    cv.create_text(cw / 2, ch - px * 2.0, text=value, fill="#ffe14d",
+                   font=(FONT, -int(px * 1.2), "bold"), tags="toast")
+    st["toast"] = root.after(1400, lambda: cv.delete("toast"))
 
 
-def on_click(event):
-    value = find_hit(event.x, event.y)
-    if value is None:
-        return
+def copy_value(value):
     root.clipboard_clear()
-    root.clipboard_append(value.replace("\n", " - "))
+    root.clipboard_append(value)
     root.update()  # keeps the clipboard content after the app closes
-    show_toast()
+    show_toast(value)
+
+
+def is_price(ref):
+    return ref is not None and ref[0] == "p"
+
+
+def on_press(event):
+    hit = find_hit(event.x, event.y)
+    st["press"] = None
+    if hit is None:
+        if st["sel"] is not None:  # click on empty space clears the highlight
+            st["sel"] = None
+            draw()
+        return
+    value, ref = hit
+    st["press"] = value  # used if the user starts dragging
+    if is_price(ref):
+        st["sel"] = (ref[1], ref[2])  # single click: highlight only
+        draw()
+    else:
+        copy_value(value)  # phones and email: single click copies
+
+
+def on_double_click(event):
+    hit = find_hit(event.x, event.y)
+    if hit is None:
+        return
+    value, ref = hit
+    st["press"] = value
+    copy_value(value)  # double click: copy the price as 7.90
 
 
 def on_motion(event):
     cv.configure(cursor="hand2" if find_hit(event.x, event.y) is not None else "")
+
+
+def on_drag_init(_event):
+    if st["press"] is None:
+        return None
+    return (COPY, DND_TEXT, st["press"])
 
 
 def schedule(_event=None):
@@ -260,6 +330,10 @@ def schedule(_event=None):
 
 
 cv.bind("<Configure>", schedule)
-cv.bind("<Button-1>", on_click)
+cv.bind("<Button-1>", on_press)
+cv.bind("<Double-Button-1>", on_double_click)
 cv.bind("<Motion>", on_motion)
+if HAS_DND:
+    cv.drag_source_register(1, DND_TEXT)
+    cv.dnd_bind("<<DragInitCmd>>", on_drag_init)
 root.mainloop()

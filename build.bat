@@ -6,17 +6,17 @@ if errorlevel 1 (
   pause
   exit /b
 )
-py -m pip install pyinstaller pillow
+py -m pip install pyinstaller pillow tkinterdnd2
 
 if exist icon.png (
-  py make_icon.py
+  if not exist icon.ico py make_icon.py
 )
 
 if exist icon.ico (
-  py -m PyInstaller --noconsole --onefile --name AlansarPrices --icon icon.ico --add-data "icon.ico;." app.py
+  py -m PyInstaller --noconsole --onefile --name AlansarPrices --icon icon.ico --add-data "icon.ico;." --collect-all tkinterdnd2 app.py
 ) else (
-  echo No icon found. Building without an icon. Put icon.png next to this file to add one.
-  py -m PyInstaller --noconsole --onefile --name AlansarPrices app.py
+  echo No icon found. Building without an icon. Put icon.ico next to this file to add one.
+  py -m PyInstaller --noconsole --onefile --name AlansarPrices --collect-all tkinterdnd2 app.py
 )
 
 echo.
